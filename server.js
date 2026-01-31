@@ -12,9 +12,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 const width = 10;
 const bombAmount = 20;
 let gameBoard = Array(width * width).fill('empty');
+let revealedFields = new Set(); // Speichert, was schon offen ist
 
 function initGame() {
     gameBoard.fill('empty');
+    revealedFields.clear();
     let bombsPlaced = 0;
     while (bombsPlaced < bombAmount) {
         let randomPos = Math.floor(Math.random() * (width * width));
@@ -26,31 +28,58 @@ function initGame() {
 }
 initGame();
 
-io.on('connection', (socket) => {
-    console.log('Ein Spieler ist beigetreten');
+// Hilfsfunktion: Zählt Bomben um ein Feld
+function countMines(index) {
+    let minesFound = 0;
+    const row = Math.floor(index / width);
+    const col = index % width;
 
+    for (let r = -1; r <= 1; r++) {
+        for (let c = -1; c <= 1; c++) {
+            const neighborRow = row + r;
+            const neighborCol = col + c;
+            if (neighborRow >= 0 && neighborRow < width && neighborCol >= 0 && neighborCol < width) {
+                const neighborIndex = neighborRow * width + neighborCol;
+                if (gameBoard[neighborIndex] === 'bomb') minesFound++;
+            }
+        }
+    }
+    return minesFound;
+}
+
+// Rekursive Flood-Fill Logik
+function revealRecursive(index, revealedList) {
+    if (revealedFields.has(index)) return;
+    
+    const mines = countMines(index);
+    revealedFields.add(index);
+    revealedList.push({ index, type: 'number', value: mines });
+
+    // Wenn es eine 0 ist, öffne die Nachbarn
+    if (mines === 0) {
+        const row = Math.floor(index / width);
+        const col = index % width;
+        for (let r = -1; r <= 1; r++) {
+            for (let c = -1; c <= 1; c++) {
+                const nRow = row + r;
+                const nCol = col + c;
+                if (nRow >= 0 && nRow < width && nCol >= 0 && nCol < width) {
+                    revealRecursive(nRow * width + nCol, revealedList);
+                }
+            }
+        }
+    }
+}
+
+io.on('connection', (socket) => {
     socket.on('cellClicked', (data) => {
         const index = data.index;
         if (gameBoard[index] === 'bomb') {
-            io.emit('updateBoard', { index: index, type: 'bomb' });
+            io.emit('updateBoard', [{ index, type: 'bomb' }]);
         } else {
-            let minesFound = 0;
-            const row = Math.floor(index / width);
-            const col = index % width;
-
-            for (let r = -1; r <= 1; r++) {
-                for (let c = -1; c <= 1; c++) {
-                    const neighborRow = row + r;
-                    const neighborCol = col + c;
-                    if (neighborRow >= 0 && neighborRow < width && neighborCol >= 0 && neighborCol < width) {
-                        const neighborIndex = neighborRow * width + neighborCol;
-                        if (gameBoard[neighborIndex] === 'bomb') {
-                            minesFound++;
-                        }
-                    }
-                }
-            }
-            io.emit('updateBoard', { index: index, type: 'number', value: minesFound });
+            let revealedList = [];
+            revealRecursive(index, revealedList);
+            io.emit('updateBoard', revealedList); // Schicke Liste aller Felder
         }
     });
 
